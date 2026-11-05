@@ -164,7 +164,7 @@ def packet_order(prog, L, layers, precs):
 
 class TileIndex:
     """Every packet and code-block contribution of one tile, with stream and file offsets."""
-    def __init__(self, j, isot):
+    def __init__(self, j, isot, max_res=None):
         self.j, self.isot = j, isot; d = j.d; cod = dict(j.main)[COD]
         scod, ht, prog = cod[4], cod[12] == 0x40, cod[5]; self.layers = u16(cod, 6)
         tps = j.tiles[isot]; self.pieces = []; chunks = []; s = 0
@@ -181,6 +181,8 @@ class TileIndex:
                        first=[None] * (b["ncbw"] * b["ncbh"]), zb=[None] * (b["ncbw"] * b["ncbh"])) for b in pr["bands"]]
             state.append(bs); self.prec[(r, pr["px"], pr["py"])] = dict(bands=bs, packets=[])
         for layer, k in packet_order(prog, j.L, self.layers, precs):
+            if max_res is not None and precs[k][0] > max_res:
+                break  # a partial index: only the packets up to resolution max_res (the rest of the stream may be absent)
             r, pr = precs[k]; start = pos
             if scod & 2: assert buf[pos:pos + 2] == b"\xff\x91"; pos += 6
             br = BitReader(buf, pos)
@@ -283,9 +285,9 @@ def _patch_layers(hdr, K):
     hdr[pos + 6:pos + 8] = struct.pack(">H", K); return bytes(hdr)
 
 
-def assemble(ti, src, edit=lambda r, px, py: None, r=None, layers=None):
+def assemble(ti, src, edit=lambda r, px, py: None, r=None, layers=None, src_offset=0):
     """Concat of tile `ti` as a standalone single-tile codestream at resolution r (default: full), keeping the
-    first `layers` quality layers (default: all). edit(r, px, py) -> None (keep the precinct) | 'empty' (replace its
+    first `layers` quality layers (default: all); `src_offset` is added to every source range offset (where the codestream starts in the source file). edit(r, px, py) -> None (keep the precinct) | 'empty' (replace its
     packets by empty ones) | set of band names to keep (its packet headers are rewritten)."""
     j = ti.j; cod = dict(j.main)[COD]; assert cod[4] & 6 == 0, "SOP/EPH not handled"
     r = j.L if r is None else r; K = ti.layers if layers is None else layers
@@ -302,11 +304,11 @@ def assemble(ti, src, edit=lambda r, px, py: None, r=None, layers=None):
         body, lens = [], []
         for p in pk:
             key = (p["r"], p["px"], p["py"]); e = edit(*key); base = ti.file_off(p["off"])
-            if e is None: ps = [Range(source=src, offset=base, length=p["hdr"] + p["body"])]
+            if e is None: ps = [Range(source=src, offset=src_offset + base, length=p["hdr"] + p["body"])]
             elif e == "empty": ps = [Range(data=b"\x00")]
             else:
                 h, ranges = rew[key][p["layer"]]
-                ps = [Range(data=h)] + [Range(source=src, offset=base + p["hdr"] + rel, length=ln) for rel, ln in ranges]
+                ps = [Range(data=h)] + [Range(source=src, offset=src_offset + base + p["hdr"] + rel, length=ln) for rel, ln in ranges]
             body += ps; lens.append(sum(len(x.data) if x.data else x.length for x in ps))
         segs = [b for m, b in tp["segs"] if m != PLT]
         if any(m == PLT for m, _ in tp["segs"]):

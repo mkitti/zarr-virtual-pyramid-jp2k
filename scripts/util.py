@@ -102,3 +102,9 @@ def ome_group_meta(levels, name, z_nm=5.24, xy_nm=4.0):
         "datasets": [{"path": f"s{n}", "coordinateTransformations": [{"type": "scale", "scale": [z_nm, xy_nm * 2 ** n, xy_nm * 2 ** n]}]}
                      for n in range(levels)]}]}
     return json.dumps({"zarr_format": 3, "node_type": "group", "attributes": {"ome": ome}}).encode()
+
+
+# Group attributes of the Human Organ Atlas archives: the dataset's CC BY 4.0 licence and its attribution.
+HOA_ATTRIBUTION = {"license": "CC-BY-4.0", "source": "https://doi.org/10.15151/ESRF-DC-1773966241",
+    "attribution": "Walsh, C. L. et al. (2024). Complete scan at 25.08 um of the heart of the body donor LADAF-2021-17 (Version 1) [Dataset]. "
+                   "European Synchrotron Radiation Facility. https://doi.org/10.15151/ESRF-DC-1773966241. CC BY 4.0. Unchanged slices, referenced in place."}
