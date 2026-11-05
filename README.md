@@ -18,6 +18,20 @@ encoded as its own 3-level reversible 5/3 codestream.
   `scripts/packets.py` parses it.
 - TLM/PLT only give tile-part/packet boundaries, not bands. OpenJPH writes TLM but no PLT; ndic writes PLT.
 
+Two numberings are in use. Zarr / OME levels count how many times the image is halved (`s0` = full resolution); the
+JPEG 2000 resolution index `rX` counts up from the smallest image (`r0` = the deepest LL band, whose packets come first
+in the file). With `L = 3` decomposition levels, `sN = r(L - N)`:
+
+| Zarr array | Size (y x x) | JPEG 2000 resolution | Bytes read (computed) | Bytes fetched over HTTP |
+|---|---|---|---|---|
+| `s0` | 512 x 512 | `r3` | 100 % | 100 % |
+| `s1` | 256 x 256 | `r2` | 26.3 % | 26.3 % |
+| `s2` | 128 x 128 | `r1` | 6.9 % | 6.9 % |
+| `s3` | 64 x 64 | `r0` | 1.8 % | 1.8 % |
+
+(Shares of the 16 codestreams of the OpenJPH pyramid, all 16 planes; the last column is measured with `refkv.Stats`,
+see `scripts/measure_io.py` and Limits below. Packet-header numbers and the `virt_res` outputs in the history use `rX`.)
+
 **Concatenation**
 - refkv references can be a list of parts (inline literal bytes and source ranges, from several URLs). kerchunk /
   fsspec `ReferenceFileSystem` only support `[url]` and `[url, offset, length]`.
