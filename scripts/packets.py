@@ -196,8 +196,11 @@ class TileIndex:
         self.consumed = pos == len(buf)
 
     def file_off(self, stream_off):
+        # half-open: an offset at a tile-part boundary belongs to the NEXT tile-part
         for s, f, n in self.pieces:
-            if s <= stream_off <= s + n: return f + stream_off - s
+            if s <= stream_off < s + n: return f + stream_off - s
+        s, f, n = self.pieces[-1]
+        if stream_off == s + n: return f + n
         raise ValueError(stream_off)
 
     def band_range(self, pkt, name):
