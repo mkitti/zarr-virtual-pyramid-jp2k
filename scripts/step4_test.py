@@ -43,13 +43,13 @@ for pkt in ti.packets:
         print(f"  {pkt['r']:>3} {ob['name']:>4} {n:>6} {ln:>8} {100 * ln / len(j.d):>8.2f}%" + (f"   header {pkt['hdr']}" if ob["name"] in ("LL", "HL") else ""))
         for i, cb in enumerate(ob["cbs"]):
             if cb: rows.append(dict(res=pkt["r"], precinct=[pkt["px"], pkt["py"]], band=ob["name"], cb=[ob["geo"]["cx0"] + i % ob["ncbw"], ob["geo"]["cy0"] + i // ob["ncbw"]],
-                                    passes=cb["passes"], zero_bitplanes=cb["zbp"], segment_lengths=cb["seglens"],
+                                    passes=cb["passes"], zero_bitplanes=next(b["zb"][i] for b in ti.prec[(pkt["r"], pkt["px"], pkt["py"])]["bands"] if b["name"] == ob["name"]), segment_lengths=cb["seglens"],
                                     file_offset=ti.file_off(pkt["off"] + pkt["hdr"] + cb["rel"]), length=cb["len"]))
 (W / "codeblock_index_p00.json").write_text(json.dumps(rows)); print(f"  wrote {len(rows)} code-block rows to codeblock_index_p00.json")
 
 print("== C. precinct ROI (tile 0 of the tiles+precincts file, finest resolution keeps only precinct (1,0) = x128..255, y0..127)")
 f = W / "enc_tiles_precincts/p00.j2c"; j = j2kvirt.J2K(f.read_bytes()); ti = packets.TileIndex(j, 0)
-c = packets.assemble(ti, 0, lambda p: "empty" if p["r"] == 3 and (p["px"], p["py"]) != (1, 0) else None)
+c = packets.assemble(ti, 0, lambda r, px, py: "empty" if r == 3 and (px, py) != (1, 0) else None)
 b = store_get(c, f); res = util.decode_both(b); ref = orig[0][:256, :256]
 tile_bytes = sum(tp["end"] - tp["body"] for tp in j.tiles[0])
 print(f"  chunk = {len(b)} B of which {nbytes(c) - sum(len(p.data) for p in c.parts if p.data)} from the source; tile has {tile_bytes} B")
@@ -81,12 +81,13 @@ img = orig[0]; ll, det = pyramid(img)
 print("  numpy 5/3 reference round-trips exactly:", np.array_equal(recon(ll, det), img),
       "| its LL1 equals OpenJPH's reduced decode (s1):", np.array_equal(np.clip(fwd2(img.astype(np.int64) - 32768)[0] + 32768, 0, 65535).astype(np.uint16), util.ojph_expand(W / "enc_ojph/p00.j2c", 1, W)))
 f = W / "enc_ojph/p00.j2c"; j = j2kvirt.J2K(f.read_bytes()); ti = packets.TileIndex(j, 0); full = len(j.d)
-same = sum(packets.write_header(p, {"LL", "HL", "LH", "HH"})[0] == ti.buf[p["off"]:p["off"] + p["hdr"]] for p in ti.packets)
+ALL = {"LL", "HL", "LH", "HH"}
+same = sum(packets.rewrite_precinct(ti, (p["r"], p["px"], p["py"]), ALL, 1)[p["layer"]][0] == ti.buf[p["off"]:p["off"] + p["hdr"]] for p in ti.packets)
 print(f"  identity rewrite: {same}/{len(ti.packets)} packet headers byte-identical to the encoder's")
-a = util.decode_both(store_get(packets.assemble(ti, 0, lambda p: {"LL", "HL", "LH", "HH"}), f))
+a = util.decode_both(store_get(packets.assemble(ti, 0, lambda r, px, py: ALL), f))
 print("  identity rewrite decodes to the original:", {k: np.array_equal(v, img) for k, v in a.items()})
 for res_, band in [(3, "HH"), (3, "HL"), (3, "LH"), (2, "HH"), (1, "HL")]:
-    c = packets.assemble(ti, 0, lambda p: ({"HL", "LH", "HH"} - {band}) if p["r"] == res_ else None)
+    c = packets.assemble(ti, 0, lambda r, px, py: ({"HL", "LH", "HH"} - {band}) if r == res_ else None)
     exp = recon(ll, det, zero=(res_, band)); out = util.decode_both(store_get(c, f))
     ok = {k: (not isinstance(v, str)) and np.array_equal(v, exp) for k, v in out.items()}
     drop = sum(len(x.data) if x.data else x.length for x in packets.assemble(ti, 0).parts) - nbytes(c)

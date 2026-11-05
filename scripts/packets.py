@@ -1,12 +1,13 @@
-"""Packet-header parsing / rewriting for single-layer, single-component J2K and HTJ2K codestreams.
+"""Packet-header parsing / rewriting for single-component J2K and HTJ2K codestreams (any number of layers).
 
-Inside a packet, the body is band-major: all code-blocks of the first band, then the next band, ...
+Inside a packet the body is band-major: all code-blocks of the first band, then the next band, ...
 (LL for resolution 0; HL, LH, HH otherwise), each in raster order. So within one packet every
 sub-band's data is ONE contiguous byte range, and a packet is [header | band | band | band].
-Dropping a band therefore needs only a new (literal) header plus source ranges for the kept bands.
+Dropping a band needs a new (literal) header plus source ranges for the kept bands; dropping a
+layer or a whole precinct needs no header rewriting at all (omit the packet / use an empty packet).
 
-Supported: LRCP/RLCP/RPCL with one layer and one component (packet order = r, then precinct raster),
-default code-block style or HT (code-block style 0x40), optional SOP/EPH (parsing only).
+Supported: LRCP, RLCP, RPCL; one component; default code-block style (one codeword segment) or HT
+with one coding-pass set (an HT code-block contributes in one layer); SOP/EPH markers parse-only.
 """
 import struct
 from j2kvirt import J2K, COD, PLT, SOT, SOD, EOC, u16, u32, varint
@@ -110,9 +111,9 @@ def write_passes(bw, n):
     else: bw.bits(0x1ff, 9); bw.bits(n - 37, 7)
 
 
-def seg_passes(passes, ht):
-    if not ht: return [passes]
-    assert passes <= 3, "HT code-blocks with more than one HT set are not supported"
+def seg_passes(passes, ht, before):
+    if not ht: return [passes]                       # default style: one codeword segment across layers
+    assert before == 0 and passes <= 3, "HT code-blocks split over layers or with more than one HT set are not supported"
     return [1] if passes == 1 else [1, passes - 1]
 
 
@@ -152,47 +153,66 @@ def geometry(j, isot):
     return res
 
 
+def packet_order(prog, L, layers, precs):
+    """precs: list of (r, ...) in resolution-major, precinct-raster order. Returns [(layer, index into precs)]."""
+    by_res = {r: [k for k, (rr, _) in enumerate(precs) if rr == r] for r in range(L + 1)}
+    if prog == 0: return [(l, k) for l in range(layers) for k in range(len(precs))]                    # LRCP
+    if prog == 1: return [(l, k) for r in range(L + 1) for l in range(layers) for k in by_res[r]]      # RLCP
+    if prog == 2: return [(l, k) for k in range(len(precs)) for l in range(layers)]                    # RPCL (1 component)
+    raise NotImplementedError("PCRL/CPRL")
+
+
 class TileIndex:
-    """Every packet and code-block of one tile, with stream and file offsets."""
+    """Every packet and code-block contribution of one tile, with stream and file offsets."""
     def __init__(self, j, isot):
         self.j, self.isot = j, isot; d = j.d; cod = dict(j.main)[COD]
-        scod, ht = cod[4], cod[12] == 0x40
+        scod, ht, prog = cod[4], cod[12] == 0x40, cod[5]; self.layers = u16(cod, 6)
         tps = j.tiles[isot]; self.pieces = []; chunks = []; s = 0
         for tp in tps:
             self.pieces.append((s, tp["body"], tp["end"] - tp["body"])); chunks.append(d[tp["body"]:tp["end"]]); s += tp["end"] - tp["body"]
         self.buf = buf = b"".join(chunks); self.geo = geometry(j, isot); self.packets = []; pos = 0
-        for rg in self.geo:
-            for pr in rg["precincts"]:
-                start = pos
-                if scod & 2: assert buf[pos:pos + 2] == b"\xff\x91"; pos += 6
-                states = [(TagTree(b["ncbw"], b["ncbh"]) if b["ncbw"] else None, TagTree(b["ncbw"], b["ncbh"]) if b["ncbw"] else None)
-                          for b in pr["bands"]]
-                br = BitReader(buf, pos); bands = [dict(name=b["name"], ncbw=b["ncbw"], ncbh=b["ncbh"], geo=b,
-                                                        cbs=[None] * (b["ncbw"] * b["ncbh"])) for b in pr["bands"]]
-                if br.bit():
-                    for ob, (incl, zbp) in zip(bands, states):
-                        for jy in range(ob["ncbh"]):
-                            for ix in range(ob["ncbw"]):
-                                if not incl.decode(br, ix, jy, 1): continue
-                                i = 1
-                                while not zbp.decode(br, ix, jy, i): i += 1
-                                passes = read_passes(br); lb = 3
-                                while br.bit(): lb += 1
-                                sp = seg_passes(passes, ht)
-                                ob["cbs"][jy * ob["ncbw"] + ix] = dict(passes=passes, zbp=i - 1, lblock=lb, segp=sp,
-                                                                       seglens=[br.bits(lb + flog2(p)) for p in sp])
-                br.align(); pos = br.pos
-                if scod & 4: assert buf[pos:pos + 2] == b"\xff\x92"; pos += 2
-                hdr_end = pos
-                for ob in bands:
-                    ob["rel"] = pos - hdr_end
-                    for cb in ob["cbs"]:
-                        if cb: cb["rel"] = pos - hdr_end; cb["len"] = sum(cb["seglens"]); pos += cb["len"]
-                    ob["len"] = pos - hdr_end - ob["rel"]
-                tpi = max(i for i, pc in enumerate(self.pieces) if pc[0] <= start)
-                assert pos <= self.pieces[tpi][0] + self.pieces[tpi][2], "packet crosses a tile-part"
-                self.packets.append(dict(r=rg["r"], px=pr["px"], py=pr["py"], off=start, hdr=hdr_end - start, body=pos - hdr_end,
-                                         bands=bands, tp=tpi))
+        precs = [(rg["r"], pr) for rg in self.geo for pr in rg["precincts"]]
+        self.prec = {}                                # (r, px, py) -> per-band first-inclusion layer / zero bit-planes, packet list
+        state = []
+        for r, pr in precs:
+            bs = [dict(name=b["name"], ncbw=b["ncbw"], ncbh=b["ncbh"], geo=b,
+                       incl=TagTree(b["ncbw"], b["ncbh"]) if b["ncbw"] else None, zbp=TagTree(b["ncbw"], b["ncbh"]) if b["ncbw"] else None,
+                       cb=[dict(inc=False, lb=3, passes=0) for _ in range(b["ncbw"] * b["ncbh"])],
+                       first=[None] * (b["ncbw"] * b["ncbh"]), zb=[None] * (b["ncbw"] * b["ncbh"])) for b in pr["bands"]]
+            state.append(bs); self.prec[(r, pr["px"], pr["py"])] = dict(bands=bs, packets=[])
+        for layer, k in packet_order(prog, j.L, self.layers, precs):
+            r, pr = precs[k]; start = pos
+            if scod & 2: assert buf[pos:pos + 2] == b"\xff\x91"; pos += 6
+            br = BitReader(buf, pos)
+            bands = [dict(name=b["name"], ncbw=b["ncbw"], ncbh=b["ncbh"], geo=b["geo"], cbs=[None] * (b["ncbw"] * b["ncbh"])) for b in state[k]]
+            if br.bit():
+                for ob, st in zip(bands, state[k]):
+                    for jy in range(ob["ncbh"]):
+                        for ix in range(ob["ncbw"]):
+                            i = jy * ob["ncbw"] + ix; c = st["cb"][i]
+                            if not c["inc"]:
+                                if not st["incl"].decode(br, ix, jy, layer + 1): continue
+                                n = 1
+                                while not st["zbp"].decode(br, ix, jy, n): n += 1
+                                c["inc"] = True; st["first"][i] = layer; st["zb"][i] = n - 1
+                            elif not br.bit(): continue
+                            passes = read_passes(br)
+                            while br.bit(): c["lb"] += 1
+                            sp = seg_passes(passes, ht, c["passes"]); c["passes"] += passes
+                            ob["cbs"][i] = dict(passes=passes, segp=sp, seglens=[br.bits(c["lb"] + flog2(p)) for p in sp], first=layer == st["first"][i])
+            br.align(); pos = br.pos
+            if scod & 4: assert buf[pos:pos + 2] == b"\xff\x92"; pos += 2
+            hdr_end = pos
+            for ob in bands:
+                ob["rel"] = pos - hdr_end
+                for cb in ob["cbs"]:
+                    if cb: cb["rel"] = pos - hdr_end; cb["len"] = sum(cb["seglens"]); pos += cb["len"]
+                ob["len"] = pos - hdr_end - ob["rel"]
+            tpi = max(i for i, pc in enumerate(self.pieces) if pc[0] <= start)
+            assert pos <= self.pieces[tpi][0] + self.pieces[tpi][2], "packet crosses a tile-part"
+            self.prec[(r, pr["px"], pr["py"])]["packets"].append(len(self.packets))
+            self.packets.append(dict(r=r, px=pr["px"], py=pr["py"], layer=layer, off=start, hdr=hdr_end - start, body=pos - hdr_end,
+                                     bands=bands, tp=tpi))
         self.consumed = pos == len(buf)
 
     def file_off(self, stream_off):
@@ -221,50 +241,78 @@ class TileIndex:
         return n, bad
 
 
-def write_header(pkt, keep):
-    """New packet header that includes only the bands named in `keep`. Returns (bytes, [(band, rel, len)])."""
-    bands = pkt["bands"]
-    inc = [[(cb is not None and ob["name"] in keep) for cb in ob["cbs"]] for ob in bands]
-    if not any(any(x) for x in inc): return b"\x00", []
-    bw = BitWriter(); bw.put(1)
-    for ob, flags in zip(bands, inc):
-        if not ob["ncbw"]: continue
-        w = ob["ncbw"]
-        it = TagTree(w, ob["ncbh"], [0 if f else 1 for f in flags])
-        zt = TagTree(w, ob["ncbh"], [ob["cbs"][i]["zbp"] if f else INF for i, f in enumerate(flags)])
-        for i, f in enumerate(flags):
-            x, y = i % w, i // w
-            it.encode(bw, x, y, 1)
-            if not f: continue
-            cb = ob["cbs"][i]; zt.encode(bw, x, y, 1000); write_passes(bw, cb["passes"])
-            lb = max(3, max(l.bit_length() - flog2(p) for l, p in zip(cb["seglens"], cb["segp"])))
-            for _ in range(lb - 3): bw.put(1)
-            bw.put(0)
-            for l, p in zip(cb["seglens"], cb["segp"]): bw.bits(l, lb + flog2(p))
-    return bw.flush(), [(ob["name"], ob["rel"], ob["len"]) for ob in bands if ob["name"] in keep and ob["len"]]
+def rewrite_precinct(ti, key, keep, K):
+    """New headers (layers < K) of one precinct that keeps only the bands named in `keep`.
+    Returns {layer: (header bytes, [(rel, length) of kept bands inside the packet body])}."""
+    bands = ti.prec[key]["bands"]; st = []
+    for b in bands:
+        n = len(b["first"]); kept = b["name"] in keep
+        st.append(dict(it=TagTree(b["ncbw"], b["ncbh"], [f if (kept and f is not None) else INF for f in b["first"]]) if n else None,
+                       zt=TagTree(b["ncbw"], b["ncbh"], [z if (kept and f is not None) else INF for z, f in zip(b["zb"], b["first"])]) if n else None,
+                       lb=[3] * n, inc=[False] * n))
+    out = {}
+    for pi in ti.prec[key]["packets"]:
+        pkt = ti.packets[pi]; l = pkt["layer"]
+        if l >= K: continue
+        contrib = [[cb if (cb is not None and ob["name"] in keep) else None for cb in ob["cbs"]] for ob in pkt["bands"]]
+        if not any(c is not None for row in contrib for c in row): out[l] = (b"\x00", []); continue
+        bw = BitWriter(); bw.put(1)
+        for ob, row, s in zip(pkt["bands"], contrib, st):
+            w = ob["ncbw"]
+            for i, cb in enumerate(row):
+                x, y = i % w, i // w
+                if not s["inc"][i]:
+                    s["it"].encode(bw, x, y, l + 1)
+                    if cb is None: continue
+                    s["inc"][i] = True; s["zt"].encode(bw, x, y, 1000)
+                else:
+                    bw.put(0 if cb is None else 1)
+                    if cb is None: continue
+                write_passes(bw, cb["passes"])
+                k = max(0, max(ln.bit_length() - flog2(p) for ln, p in zip(cb["seglens"], cb["segp"])) - s["lb"][i])
+                for _ in range(k): bw.put(1)
+                bw.put(0); s["lb"][i] += k
+                for ln, p in zip(cb["seglens"], cb["segp"]): bw.bits(ln, s["lb"][i] + flog2(p))
+        out[l] = (bw.flush(), [(ob["rel"], ob["len"]) for ob in pkt["bands"] if ob["name"] in keep and ob["len"]])
+    return out
 
 
-def assemble(ti, src, edit=lambda pkt: None):
-    """Concat of the full-resolution codestream of tile `ti` as a standalone single-tile file, with per-packet edits.
-    edit(pkt) -> None (keep) | 'empty' | set of band names to keep."""
+def _patch_layers(hdr, K):
+    pos = 2; hdr = bytearray(hdr)
+    while hdr[pos:pos + 2] != COD: pos += 2 + u16(hdr, pos + 2)
+    hdr[pos + 6:pos + 8] = struct.pack(">H", K); return bytes(hdr)
+
+
+def assemble(ti, src, edit=lambda r, px, py: None, r=None, layers=None):
+    """Concat of tile `ti` as a standalone single-tile codestream at resolution r (default: full), keeping the
+    first `layers` quality layers (default: all). edit(r, px, py) -> None (keep the precinct) | 'empty' (replace its
+    packets by empty ones) | set of band names to keep (its packet headers are rewritten)."""
     j = ti.j; cod = dict(j.main)[COD]; assert cod[4] & 6 == 0, "SOP/EPH not handled"
-    parts = [j.chunk(src, j.L, tile=ti.isot if len(j.tiles) > 1 else None)[0].parts[0]]
-    for k, tp in enumerate(j.tiles[ti.isot]):
-        plt = any(m == PLT for m, _ in tp["segs"]); pk = [p for p in ti.packets if p["tp"] == k]
+    r = j.L if r is None else r; K = ti.layers if layers is None else layers
+    hdr = j.header(r, tile=ti.isot if len(j.tiles) > 1 else None)[0]
+    if K != ti.layers: hdr = _patch_layers(hdr, K)
+    rew = {}
+    for key in ti.prec:
+        e = edit(*key)
+        if e is not None and e != "empty" and key[0] <= r: rew[key] = rewrite_precinct(ti, key, e, K)
+    kept = [(tp, [p for p in ti.packets if p["tp"] == k and p["r"] <= r and p["layer"] < K]) for k, tp in enumerate(j.tiles[ti.isot])]
+    kept = [(tp, pk) for tp, pk in kept if pk]
+    parts = [Range(data=hdr)]
+    for k, (tp, pk) in enumerate(kept):
         body, lens = [], []
         for p in pk:
-            e = edit(p); base = ti.file_off(p["off"])
+            key = (p["r"], p["px"], p["py"]); e = edit(*key); base = ti.file_off(p["off"])
             if e is None: ps = [Range(source=src, offset=base, length=p["hdr"] + p["body"])]
             elif e == "empty": ps = [Range(data=b"\x00")]
             else:
-                hdr, ranges = write_header(p, e); ps = [Range(data=hdr)] + [
-                    Range(source=src, offset=base + p["hdr"] + rel, length=ln) for _, rel, ln in ranges]
+                h, ranges = rew[key][p["layer"]]
+                ps = [Range(data=h)] + [Range(source=src, offset=base + p["hdr"] + rel, length=ln) for rel, ln in ranges]
             body += ps; lens.append(sum(len(x.data) if x.data else x.length for x in ps))
         segs = [b for m, b in tp["segs"] if m != PLT]
-        if plt:
+        if any(m == PLT for m, _ in tp["segs"]):
             pn = b"".join(varint(x) for x in lens); segs.insert(0, PLT + struct.pack(">H", 3 + len(pn)) + b"\x00" + pn)
         sb = b"".join(segs); psot = 12 + len(sb) + 2 + sum(lens)
-        parts.append(Range(data=SOT + struct.pack(">HHIBB", 10, 0 if len(j.tiles) > 1 else ti.isot, psot, k, len(j.tiles[ti.isot])) + sb + SOD))
+        parts.append(Range(data=SOT + struct.pack(">HHIBB", 10, 0 if len(j.tiles) > 1 else ti.isot, psot, k, len(kept)) + sb + SOD))
         parts += body
     parts.append(Range(data=EOC))
     return Concat(tuple(parts))

@@ -50,7 +50,7 @@ class J2K:
         self.X, self.Y, self.XT, self.YT = u32(siz, 6), u32(siz, 10), u32(siz, 22), u32(siz, 26)
         assert u32(siz, 14) == u32(siz, 18) == u32(siz, 30) == u32(siz, 34) == 0, "image/tile offsets"
         assert u16(siz, 38) == 1, "one component only"
-        cod = seg[COD]; self.L = cod[9]; assert u16(cod, 6) == 1, "one layer only"
+        cod = seg[COD]; self.L = cod[9]; self.layers = u16(cod, 6)
         assert cod[5] in (0, 1, 2), "progression must be LRCP/RLCP/RPCL"   # LRCP == RLCP for 1 layer
         self.ntx = -(-self.X // self.XT)
         self.nty = -(-self.Y // self.YT)
@@ -102,9 +102,9 @@ class J2K:
         b = bytearray(b[:5 + (1 + 3 * r) * esz]); b[2:4] = struct.pack(">H", len(b) - 2)
         return bytes(b)
 
-    def chunk(self, src, r, tile=None):
-        """Concat for resolution r (0..L). tile=None: the whole (single-tile) image;
-        tile=t: a standalone codestream of tile t. Returns (Concat, bytes read from the source)."""
+    def header(self, r, tile=None):
+        """Main header for resolution r (0..L) as a standalone codestream; tile=None: the whole
+        (single-tile) image, tile=t: tile t alone. TLM is dropped. Returns (bytes, isot, new_isot)."""
         n = self.L - r
         if tile is None:
             assert len(self.tiles) == 1, "multi-tile image: pass tile="
@@ -122,6 +122,12 @@ class J2K:
             elif m == QCD: b = self._qcd(b, r)
             elif m == TLM: continue                      # optional; lengths would need rewriting
             main += b
+        return main, isot, new_isot
+
+    def chunk(self, src, r, tile=None):
+        """Concat for resolution r (0..L). tile=None: the whole (single-tile) image;
+        tile=t: a standalone codestream of tile t. Returns (Concat, bytes read from the source)."""
+        main, isot, new_isot = self.header(r, tile)
         parts = [Range(data=main)]; units = self.units(isot, r); nread = 0
         for i, (segs, off, ln) in enumerate(units):
             sb = b"".join(b for _, b in segs)

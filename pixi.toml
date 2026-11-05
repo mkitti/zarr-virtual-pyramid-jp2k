@@ -10,6 +10,8 @@ zarr = ">=3.4"
 imagecodecs = "*"
 ml_dtypes = "*"
 openjph = ">=0.32.0,<0.33"
+openjpeg = ">=2.5.4,<3"
+ome-zarr-models = ">=1.8.1,<2"
 
 [activation.env]
 # local refkv clone (pure-Python package plus its compiled refkv._core)
