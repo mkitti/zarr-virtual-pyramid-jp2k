@@ -9,7 +9,7 @@ from refkv.pb import Source
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import j2kvirt, util
 
-W = pathlib.Path(sys.argv[1]); NZ = 16
+W = pathlib.Path(sys.argv[1]); NZ = 16; BASE = util.base_url_arg()
 orig = np.load(W / "hela2_crop/s0.npy")
 arrays = {}
 for enc, folder in (("ndic", "enc"), ("ojph", "enc_ojph")):
@@ -17,13 +17,13 @@ for enc, folder in (("ndic", "enc"), ("ojph", "enc_ojph")):
     full = 0
     for z in range(NZ):
         f = W / folder / f"p{z:02d}.j2c"; d = f.read_bytes(); full += len(d)
-        sources.append(Source(url=f.resolve().as_uri())); j = j2kvirt.J2K(d)
+        sources.append(util.make_source(f, W, BASE)); j = j2kvirt.J2K(d)
         for n in range(j.L + 1):                                # n = Zarr level, s0 = full
             c, nread = j.chunk(z, j.L - n); mapping[f"s{n}/c/{z}/0/0"] = c; read[n] = read.get(n, 0) + nread
     L = j.L; mapping["zarr.json"] = util.ome_group_meta(L + 1, "jrc_hela-2 em/fibsem-uint16 crop (virtual HTJ2K pyramid)")
     for n in range(L + 1):
         w = 512 >> n; mapping[f"s{n}/zarr.json"] = util.array_meta((NZ, w, w), (1, w, w))
-    out = W / f"hela2_pyramid_{enc}.vzip"; refkv.ReferenceStore(mapping, sources).save(str(out))
+    out = util.archive_path(W, BASE, f"hela2_pyramid_{enc}.vzip"); refkv.ReferenceStore(mapping, sources).save(str(out))
     g = zarr.open_group(rz.open(str(out)), mode="r")
     arrays[enc] = [g[f"s{n}"][:] for n in range(L + 1)]
     print(f"[{enc}] {out.name}: {len(mapping)} keys; source bytes read per level "

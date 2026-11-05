@@ -1,5 +1,6 @@
 """Shared helpers: PGM I/O, OpenJPH CLI wrappers, Zarr v3 metadata for refkv pyramids."""
-import json, subprocess, pathlib, numpy as np, imagecodecs as ic
+import email.utils, hashlib, json, re, subprocess, sys, pathlib, urllib.request, numpy as np, imagecodecs as ic
+from refkv.pb import Source
 
 
 def write_pgm16(path, a):
@@ -47,6 +48,46 @@ def array_meta(shape, chunks, codec="imagecodecs_htj2k"):
         "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": list(chunks)}},
         "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}}, "fill_value": 0,
         "codecs": [{"name": codec, "configuration": {}}], "dimension_names": ["z", "y", "x"]}).encode()
+
+
+_REMOTE_FOLDER = {"enc": "enc_ndic"}                  # local folder name -> folder name in the upload
+
+
+def base_url_arg():
+    """Remove `--base-url URL` from sys.argv and return it with a trailing slash (None if absent)."""
+    a = sys.argv
+    if "--base-url" not in a: return None
+    i = a.index("--base-url"); u = a[i + 1]; del a[i:i + 2]
+    return u.rstrip("/") + "/"
+
+
+def make_source(f, W, base):
+    """refkv Source for codestream file f: its local file URL, or (with base) its uploaded https URL pinned with the
+    object's size and ETag, after checking that the uploaded object is byte-identical (size, and MD5 when the ETag is one)."""
+    f = pathlib.Path(f)
+    if base is None: return Source(url=f.resolve().as_uri())
+    url = base + f"{_REMOTE_FOLDER.get(f.parent.name, f.parent.name)}/{f.name}"
+    data = f.read_bytes()
+    with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=60) as r:
+        size, etag, lm = int(r.headers["Content-Length"]), r.headers.get("ETag"), r.headers.get("Last-Modified")
+    if size != len(data): raise SystemExit(f"{url}: remote size {size} != local {len(data)}")
+    for a, b in ((0, 64), (len(data) - 64, len(data))):                      # spot-check both ends
+        req = urllib.request.Request(url, headers={"Range": f"bytes={a}-{b - 1}"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            if r.read() != data[a:b]: raise SystemExit(f"{url}: bytes {a}-{b - 1} differ from the local file")
+    pins = {"size": size}
+    if etag and re.fullmatch(r'"[^"]*"', etag):                              # a strong ETag, when the server sends one
+        if "-" not in etag and etag.strip('"') != hashlib.md5(data).hexdigest(): raise SystemExit(f"{url}: ETag {etag} != local MD5")
+        pins["etag"] = etag
+    if lm: pins["modified_not_after"] = int(email.utils.parsedate_to_datetime(lm).timestamp())
+    return Source(url=url, **pins)
+
+
+def archive_path(W, base, name):
+    """Where to write an archive: the work dir for local-path archives, the upload folder for remote ones."""
+    if base is None: return pathlib.Path(W) / name
+    d = pathlib.Path(__file__).resolve().parents[1] / "upload" / "hela2" / "archives"; d.mkdir(parents=True, exist_ok=True)
+    return d / name
 
 
 GROUP_META = json.dumps({"zarr_format": 3, "node_type": "group", "attributes": {}}).encode()

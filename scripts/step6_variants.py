@@ -10,7 +10,7 @@ from ome_zarr_models.v05 import Image
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import j2kvirt, packets, util, dwt53
 
-W = pathlib.Path(sys.argv[1]); NZ = 16; L = 3; HF = {"HL", "LH", "HH"}
+W = pathlib.Path(sys.argv[1]); NZ = 16; L = 3; HF = {"HL", "LH", "HH"}; BASE = util.base_url_arg()
 orig = np.load(W / "hela2_crop/s0.npy"); opj = W / "enc_opj"
 for z in range(NZ):                                           # encode the OpenJPEG planes once
     f = opj / f"p{z:02d}.j2k"
@@ -25,7 +25,7 @@ def build(folder, ext, codec, variants, vzip):
     """variants: {group path ('' = root): kwargs for packets.assemble, or a function n -> kwargs}"""
     sources, mapping, cost, tis = [], {}, {}, []
     for z in range(NZ):
-        f = W / folder / f"p{z:02d}.{ext}"; sources.append(Source(url=f.resolve().as_uri()))
+        f = W / folder / f"p{z:02d}.{ext}"; sources.append(util.make_source(f, W, BASE))
         tis.append(packets.TileIndex(j2kvirt.J2K(f.read_bytes()), 0))
     full = sum(len(t.j.d) for t in tis)
     for group, spec in variants.items():
@@ -36,7 +36,7 @@ def build(folder, ext, codec, variants, vzip):
             for z in range(NZ):
                 c = packets.assemble(tis[z], z, r=L - n, **spec(n)); mapping[f"{pre}s{n}/c/{z}/0/0"] = c
                 cost[(group, n)] = cost.get((group, n), 0) + src_bytes(c)
-    out = W / vzip; refkv.ReferenceStore(mapping, sources).save(str(out))
+    out = util.archive_path(W, BASE, vzip); refkv.ReferenceStore(mapping, sources).save(str(out))
     return zarr.open_group(rz.open(str(out)), mode="r"), cost, full
 
 def table(cost, full, groups):
