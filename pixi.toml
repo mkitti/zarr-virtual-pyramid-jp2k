@@ -1,0 +1,19 @@
+[workspace]
+name = "zarr-virtual-pyramid-jp2k"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+python = "3.12.*"
+numpy = ">=2.5.3"
+zarr = ">=3.4"
+imagecodecs = "*"
+ml_dtypes = "*"
+openjph = ">=0.32.0,<0.33"
+
+[activation.env]
+# local refkv clone (pure-Python package plus its compiled refkv._core)
+PYTHONPATH = "C:/Users/kittisopikulm/src/refkv/python/src"
+
+[pypi-dependencies]
+imagecodecs-zarr = ">=2026.10.10, <2027"
