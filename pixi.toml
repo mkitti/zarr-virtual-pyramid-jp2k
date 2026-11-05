@@ -12,6 +12,8 @@ ml_dtypes = "*"
 openjph = ">=0.32.0,<0.33"
 openjpeg = ">=2.5.4,<3"
 ome-zarr-models = ">=1.8.1,<2"
+fsspec = ">=2026.9.0,<2027"
+aiohttp = ">=3.14.5,<4"
 
 [activation.env]
 # local refkv clone (pure-Python package plus its compiled refkv._core)
