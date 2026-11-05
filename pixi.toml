@@ -19,3 +19,4 @@ PYTHONPATH = "C:/Users/kittisopikulm/src/refkv/python/src"
 
 [pypi-dependencies]
 imagecodecs-zarr = ">=2026.10.10, <2027"
+nd-image-codecs = { version = ">=0.2.5, <0.3", extras = ["zarr"] }

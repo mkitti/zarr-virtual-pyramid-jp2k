@@ -97,6 +97,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: https://files.pythonhosted.org/packages/70/81/cb54215fa37b93e4b07a6ea03101406ff933ea1cc3b23a3d192f6a3fcb2f/imagecodecs_zarr-2026.10.10-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/9a/ae/c2c12beb157e86462406936e600ff6a63143fd5c4779a63b8f6e804bca5b/nd_image_codecs-0.2.5-cp311-abi3-win_amd64.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-types-0.8.0-pyhd8ed1ab_0.conda
   sha256: b8fcb994134d3918d1c64a9d62f4168ff85d5bfb89e698102fe4ed679fe0df24
@@ -1446,3 +1447,17 @@ packages:
   - zarr>=3.2
   - imagecodecs>=2026.10.10
   requires_python: '>=3.12'
+- pypi: https://files.pythonhosted.org/packages/9a/ae/c2c12beb157e86462406936e600ff6a63143fd5c4779a63b8f6e804bca5b/nd_image_codecs-0.2.5-cp311-abi3-win_amd64.whl
+  name: nd-image-codecs
+  version: 0.2.5
+  sha256: 3851bd799d5f92313d228f6a50963e8fc22d5d6b9eab1bf091c57af4476fbdd1
+  requires_dist:
+  - numpy>=1.26
+  - pytest ; extra == 'test'
+  - imagecodecs ; extra == 'test'
+  - jsonschema>=4.0.0 ; extra == 'test'
+  - zarr>=3.1 ; extra == 'test'
+  - ngff-zarr[validate] ; extra == 'test'
+  - ome-zarr>=0.12.0 ; extra == 'test'
+  - zarr>=3.1 ; extra == 'zarr'
+  requires_python: '>=3.11'
