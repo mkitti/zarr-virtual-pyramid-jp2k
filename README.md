@@ -77,3 +77,7 @@ pixi run python scripts/step6_variants.py <work>
 
 The encoded codestreams used here are public at `https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/`
 (`enc_ojph`, `enc_opj`, `enc_tiles_precincts`, `enc_ndic`, with a `MANIFEST.sha256`).
+
+## License
+
+3-clause BSD, copyright Howard Hughes Medical Institute (the [Janelia open-source license](https://www.janelia.org/open-science/software-licensing)). See `LICENSE`.
