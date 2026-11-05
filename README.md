@@ -83,3 +83,15 @@ The encoded codestreams used here are public at
 ## License
 
 3-clause BSD, copyright Howard Hughes Medical Institute (the [Janelia open-source license](https://www.janelia.org/open-science/software-licensing)). See `LICENSE`.
+
+## Opening an existing JP2 (no PLT, no precincts, no tiles)
+
+`scripts/make_jp2_omezarr.py` turns a plain single-tile, single-layer, LRCP/RLCP JPEG 2000 file into a 9-level OME-Zarr
+0.5 pyramid (`.vzip`, ~10 KB) that references the original `.jp2` bytes. Tested on `8.01um_LADAF-2021-17_heart_complete-organ_pag-0.03_0.07_00645.jp2`
+(13600 x 11856 uint16, one 32 MB tile, 8 levels, irreversible 9/7, classic J2K). Every level equals `opj_decompress -r N`.
+
+- With no PLT the resolution boundaries come from parsing packet headers (`packets.TileIndex`, 3 s); the JP2 box wrapper is
+  skipped by shifting offsets by the codestream start.
+- Each level is **one chunk** (the file has one precinct per resolution), so a level is read whole. Bytes read:
+  s0 100 %, s1 70.0 %, s2 24.7 %, s3 6.6 %, s4 1.8 %, s5 0.5 %. The file's finest HH band is nearly empty (50 KB of 32 MB).
+- Spatial random access at s0/s1 would need precincts or tiles at encode time; a re-encode is the only fix.
