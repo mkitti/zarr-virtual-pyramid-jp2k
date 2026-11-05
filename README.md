@@ -80,6 +80,46 @@ The encoded codestreams used here are public at
 (`enc_ojph`, `enc_opj`, `enc_tiles_precincts`, `enc_ndic`, with a
 [`MANIFEST.sha256`](https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/MANIFEST.sha256)).
 
+## Reading the remote archives with zarr-python
+
+Archives (refkv `.vzip` stores whose chunks are byte-range references into the codestreams above), under
+`https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/`:
+
+| Archive | Contents |
+|---|---|
+| [`hela2_pyramid_ojph.vzip`](https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/hela2_pyramid_ojph.vzip) | OME-Zarr pyramid `s0`..`s3` from the OpenJPH files |
+| [`hela2_pyramid_ndic.vzip`](https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/hela2_pyramid_ndic.vzip) | the same pyramid from the ndic files |
+| [`hela2_quality.vzip`](https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/hela2_quality.vzip) | full quality at the root, plus groups `q1`, `q2`, `q3` (first 1-3 quality layers) |
+| [`hela2_nohh.vzip`](https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/hela2_nohh.vzip) | full quality at the root, plus group `nohh` (finest HH band removed) |
+
+```python
+import zarr
+import refkv.zarr as rz
+
+url = "https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/hela2_pyramid_ojph.vzip"
+g = zarr.open_group(rz.open(url), mode="r")
+
+g["s3"].shape                     # (16, 64, 64)    smallest level, reads about 2% of the bytes
+g["s0"].shape                     # (16, 512, 512)  full resolution, lossless
+plane = g["s1"][0]                # one z-plane at half resolution (256 x 256, uint16)
+```
+
+Quality and band-drop variants are groups inside the other archives:
+
+```python
+base = "https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/"
+q = zarr.open_group(rz.open(base + "hela2_quality.vzip"), mode="r")
+q["q1/s0"][0]     # first quality layer only, about 4% of the bytes, PSNR 39 dB
+q["s0"][0]        # full quality, lossless
+n = zarr.open_group(rz.open(base + "hela2_nohh.vzip"), mode="r")
+n["nohh/s0"][0]   # finest HH band removed, about 75% of the bytes
+```
+
+Needs `refkv` importable (see `pixi.toml`; plain `zarr.open("https://....vzip")` does not work, since zarr-python has
+no vzip store), plus `imagecodecs-zarr` for the `imagecodecs_htj2k` / `imagecodecs_jpeg2k` codecs and `ml_dtypes`.
+The archives were built with `--base-url https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/` (sources pinned by
+size and last-modified time). Not tested: xarray, ome-zarr-py, or any viewer (Neuroglancer has no JPEG 2000 decoder).
+
 ## License
 
 3-clause BSD, copyright Howard Hughes Medical Institute (the [Janelia open-source license](https://www.janelia.org/open-science/software-licensing)). See `LICENSE`.
