@@ -75,8 +75,10 @@ pixi run python scripts/build_pyramid.py <work>
 pixi run python scripts/step6_variants.py <work>
 ```
 
-The encoded codestreams used here are public at `https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/`
-(`enc_ojph`, `enc_opj`, `enc_tiles_precincts`, `enc_ndic`, with a `MANIFEST.sha256`).
+The encoded codestreams used here are public at
+[https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/](https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/)
+(`enc_ojph`, `enc_opj`, `enc_tiles_precincts`, `enc_ndic`, with a
+[`MANIFEST.sha256`](https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/MANIFEST.sha256)).
 
 ## License
 
