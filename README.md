@@ -34,7 +34,7 @@ encoded as its own 3-level reversible 5/3 codestream.
 | Packet-header parser, 4 file layouts | every packet consumed exactly; PLT lengths match; all HT cleanup segments end in a valid Scup |
 | Drop one sub-band (any resolution) by rewriting packet headers | matches an independent numpy 5/3 wavelet exactly; 24.6 % of the file for the finest band |
 | Drop precincts (empty 1-byte packets) / band-by-precinct | ROI interior identical to the original; band/precinct geometry matches numpy |
-| 4-layer classic J2K, layers 1..3, with reduced resolution | equals `opj_decompress -l K -r n`; 4.0 / 8.1 / 16.2 % of the bytes |
+| 4-layer classic J2K, layers 1..3, with reduced resolution | equals `opj_decompress -l K -r n`; references cover 4.0 / 8.1 / 16.2 % of the bytes (transferred: see below) |
 | Quality groups (`q1`-`q3`) and `nohh` group as OME-Zarr 0.5 pyramids | validate with `ome-zarr-models`; read through zarr-python |
 
 **Limits and untested**
@@ -44,7 +44,12 @@ encoded as its own 3-level reversible 5/3 codestream.
 - One component, reversible 5/3 or expounded-QCD 9/7; scalar-derived QCD, PCRL/CPRL, SOP/EPH rebuilding unsupported.
 - The wavelet low-pass pyramid is not OpenOrganelle's 3D-mean pyramid (mean abs diff roughly 3-4 % of the range at s3);
   z is not downsampled; no translation is written (a 5/3 LL sample sits at full-resolution sample 2n).
-- Byte shares are computed from range lengths, not measured network reads. HTTP reads of the archives are not yet timed.
+- Byte shares in the tables are computed from range lengths. `scripts/measure_io.py` measures what zarr-python
+  fetches from the S3 archives (`refkv.Stats`): pyramid reads match (s3/s2/s1/s0 = 1.8 / 6.9 / 26.3 / 100 %) and so does
+  `nohh/s0` (75.4 %), but quality-layer reads transfer more than the references cover: `q1/q2/q3` at s0 fetch
+  9.0 / 28.7 / 36.0 % instead of 4.0 / 8.1 / 16.1 %, because refkv merges ranges less than 64 KiB apart (`MERGE_GAP`) and
+  a plane's early layers sit between larger later-layer packets. With `MERGE_GAP` of 4096 or 0 the transfer equals the
+  references, in 64 requests instead of 16-32. No wall-clock benchmark has been done.
 - ndic (`nd-image-codecs`) is an independent HT implementation and strict: single tile, reversible 5/3, PLT required.
 
 ## Layout
@@ -109,7 +114,7 @@ Quality and band-drop variants are groups inside the other archives:
 ```python
 base = "https://s3.janelia.org/scicompsoft/kittisopikulm/hela2/archives/"
 q = zarr.open_group(rz.open(base + "hela2_quality.vzip"), mode="r")
-q["q1/s0"][0]     # first quality layer only, about 4% of the bytes, PSNR 39 dB
+q["q1/s0"][0]     # first quality layer only, PSNR 39 dB; references 4% of the bytes, 9% transferred (see Limits)
 q["s0"][0]        # full quality, lossless
 n = zarr.open_group(rz.open(base + "hela2_nohh.vzip"), mode="r")
 n["nohh/s0"][0]   # finest HH band removed, about 75% of the bytes
