@@ -22,3 +22,14 @@ PYTHONPATH = "C:/Users/kittisopikulm/src/refkv/python/src"
 [pypi-dependencies]
 imagecodecs-zarr = ">=2026.10.10, <2027"
 nd-image-codecs = { version = ">=0.2.5, <0.3", extras = ["zarr"] }
+
+# Toolchain for building nd-image-codecs' WebAssembly (used for the Neuroglancer codecs); `pixi run -e wasm ...`
+[feature.wasm.dependencies]
+rust = "*"
+rust-std-wasm32-unknown-unknown = "*"
+wasm-pack = "*"
+wasm-bindgen-cli = "==0.2.126"
+binaryen = "*"
+
+[environments]
+wasm = { features = ["wasm"], no-default-feature = true }
