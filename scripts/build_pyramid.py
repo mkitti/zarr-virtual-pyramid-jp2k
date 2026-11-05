@@ -20,7 +20,7 @@ for enc, folder in (("ndic", "enc"), ("ojph", "enc_ojph")):
         sources.append(Source(url=f.resolve().as_uri())); j = j2kvirt.J2K(d)
         for n in range(j.L + 1):                                # n = Zarr level, s0 = full
             c, nread = j.chunk(z, j.L - n); mapping[f"s{n}/c/{z}/0/0"] = c; read[n] = read.get(n, 0) + nread
-    L = j.L; mapping["zarr.json"] = util.GROUP_META
+    L = j.L; mapping["zarr.json"] = util.ome_group_meta(L + 1, "jrc_hela-2 em/fibsem-uint16 crop (virtual HTJ2K pyramid)")
     for n in range(L + 1):
         w = 512 >> n; mapping[f"s{n}/zarr.json"] = util.array_meta((NZ, w, w), (1, w, w))
     out = W / f"hela2_pyramid_{enc}.vzip"; refkv.ReferenceStore(mapping, sources).save(str(out))
@@ -29,6 +29,10 @@ for enc, folder in (("ndic", "enc"), ("ojph", "enc_ojph")):
     print(f"[{enc}] {out.name}: {len(mapping)} keys; source bytes read per level "
           + ", ".join(f"s{n}={100 * read[n] / full:.1f}%" for n in range(L + 1)))
     print(f"[{enc}] s0 equals the original u16 data: {np.array_equal(arrays[enc][0], orig)}")
+    from ome_zarr_models.v05 import Image          # validates the multiscales metadata against the member arrays
+    img = Image.from_zarr(g); ms = img.attributes.ome.multiscales[0]
+    print(f"[{enc}] OME-Zarr 0.5 validation (ome-zarr-models {__import__('ome_zarr_models').__version__}): OK, "
+          f"{len(ms.datasets)} datasets, axes {[a.name for a in ms.axes]}")
 for n in range(1, L + 1):
     print(f"s{n} {arrays['ndic'][n].shape}: identical between the ndic- and OpenJPH-encoded pyramids "
           f"(all {NZ} planes): {np.array_equal(arrays['ndic'][n], arrays['ojph'][n])}")

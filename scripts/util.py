@@ -8,10 +8,16 @@ def write_pgm16(path, a):
 
 
 def read_pgm16(path):
-    d = pathlib.Path(path).read_bytes()
-    parts = d.split(None, 4)             # P5 w h maxval <data>
-    w, h = int(parts[1]), int(parts[2]); data = parts[4] if len(parts) > 4 else b""
-    # split() strips whitespace before the data only; the single separator byte is consumed by maxsplit
+    d = pathlib.Path(path).read_bytes(); i = 0; toks = []
+    while len(toks) < 4:                                   # P5 width height maxval, with optional # comments
+        while d[i:i + 1].isspace(): i += 1
+        if d[i:i + 1] == b"#":
+            while d[i:i + 1] != b"\n": i += 1
+            continue
+        j = i
+        while not d[j:j + 1].isspace(): j += 1
+        toks.append(d[i:j]); i = j
+    w, h = int(toks[1]), int(toks[2]); data = d[i + 1:]    # one whitespace byte separates the header from the data
     return np.frombuffer(data, dtype=">u2")[: w * h].reshape(h, w).astype(np.uint16)
 
 
@@ -44,3 +50,14 @@ def array_meta(shape, chunks, codec="imagecodecs_htj2k"):
 
 
 GROUP_META = json.dumps({"zarr_format": 3, "node_type": "group", "attributes": {}}).encode()
+
+
+def ome_group_meta(levels, name, z_nm=5.24, xy_nm=4.0):
+    """OME-NGFF 0.5 multiscales group. Only y and x are halved per level (z planes are separate codestreams).
+    No translation: a 5/3 low-pass sample n sits at the position of full-resolution sample 2n (point-aligned)."""
+    ome = {"version": "0.5", "multiscales": [{
+        "name": name,
+        "axes": [{"name": a, "type": "space", "unit": "nanometer"} for a in "zyx"],
+        "datasets": [{"path": f"s{n}", "coordinateTransformations": [{"type": "scale", "scale": [z_nm, xy_nm * 2 ** n, xy_nm * 2 ** n]}]}
+                     for n in range(levels)]}]}
+    return json.dumps({"zarr_format": 3, "node_type": "group", "attributes": {"ome": ome}}).encode()
